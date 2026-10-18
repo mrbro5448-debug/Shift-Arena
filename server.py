@@ -12,13 +12,15 @@ rooms={}
 
 def nearest_tile(x,y):return min(POSITIONS,key=lambda k:(POSITIONS[k][0]-x)**2+(POSITIONS[k][1]-y)**2)
 def new_room(code,practice=False):
- room={'code':code,'players':{},'clients':{},'practice':practice,'phase':'lobby','start':0,'tiles':{},'event':-1,'winner':None,'last':time.monotonic()};rooms[code]=room;return room
+ room={'code':code,'players':{},'clients':{},'practice':practice,'phase':'lobby','start':0,'tiles':{},'event':-1,'winner':None,'last':time.monotonic(),'host':None};rooms[code]=room;return room
 
 def add_player(room,ws,name,bot=False):
  ids=set(room['players']); pid=next(i for i in range(8) if i not in ids)
  x,y=SPAWNS[pid];p={'id':pid,'name':(name or 'Shifter')[:18],'x':x,'y':y,'alive':True,'jump':0.,'cooldown':0.,'input':[0,0],'bot':bot,'survival':0.,'angle':0.,'disconnect':False}
  room['players'][pid]=p
- if ws:room['clients'][ws]=pid
+ if ws:
+  room['clients'][ws]=pid
+  if room['host'] is None:room['host']=pid
  return pid
 
 def start(room):
@@ -38,7 +40,7 @@ def apply_shift(room,step):
 
 def snapshot(room):
  elapsed=min(60,max(0,time.monotonic()-room['start'])) if room['phase']!='lobby' else 0
- return {'type':'state','code':room['code'],'phase':room['phase'],'time':round(elapsed,1),'players':[{k:v for k,v in p.items() if k in ('id','name','x','y','alive','jump','bot','survival')} for p in room['players'].values()],'tiles':[[q,r,room['tiles'].get((q,r),'safe')] for q,r in TILES], 'winner':room['winner'],'count':len([p for p in room['players'].values() if not p['bot']])}
+ return {'type':'state','code':room['code'],'phase':room['phase'],'time':round(elapsed,1),'players':[{k:v for k,v in p.items() if k in ('id','name','x','y','alive','jump','bot','survival')} for p in room['players'].values()],'tiles':[[q,r,room['tiles'].get((q,r),'safe')] for q,r in TILES], 'winner':room['winner'],'count':len([p for p in room['players'].values() if not p['bot']]),'host':room['host']}
 
 async def broadcast(room):
  msg=json.dumps(snapshot(room))
@@ -104,7 +106,15 @@ async def ws_handler(request):
     if practice:
      for i in range(7):add_player(room,None,'BOT '+str(i+1),True)
      start(room)
-    elif len(room['players'])==8:start(room)
+    elif len(room['players'])==8:
+     start(room)
+   elif typ=='start' and room is not None and room['phase']=='lobby' and pid==room['host']:
+    human_count=sum(not p['bot'] for p in room['players'].values())
+    if human_count<2:
+     await ws.send_json({'type':'error','message':'Invite at least one friend before starting.'})
+    else:
+     for i in range(8-len(room['players'])):add_player(room,None,'BOT '+str(i+1),True)
+     start(room)
    elif typ=='input' and room is not None and pid in room['players']:
     p=room['players'][pid]
     try:x=float(d.get('x',0));y=float(d.get('y',0))
@@ -118,7 +128,9 @@ async def ws_handler(request):
   if room is not None:
    room['clients'].pop(ws,None)
    if pid in room['players']:
-    if room['phase']=='lobby':room['players'].pop(pid,None)
+    if room['phase']=='lobby':
+     room['players'].pop(pid,None)
+     if room['host']==pid:room['host']=next((i for i,p in room['players'].items() if not p['bot']),None)
     else:room['players'][pid]['alive']=False;room['players'][pid]['disconnect']=True
  return ws
 
