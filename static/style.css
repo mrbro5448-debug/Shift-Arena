@@ -6,3 +6,15 @@ button.primary{box-shadow:0 4px 22px #6756ed65;background:linear-gradient(100deg
 button.primary:hover{filter:brightness(1.12)}
 #hud{padding-top:env(safe-area-inset-top);gap:8px}#timer{text-shadow:0 0 22px #46e6daaa}#status{text-shadow:0 0 14px #b48affaa}#jump{box-shadow:0 0 28px #b955df99,inset 0 0 20px #e9a3ff40}#stickBase{box-shadow:0 0 22px #45dfe344}
 @media(max-width:700px) and (orientation:landscape){#hud{justify-content:center;gap:6vw}#status{font-size:11px}#roomCode{font-size:9px}#stickZone{left:max(2%,env(safe-area-inset-left))}#jump{right:max(4%,env(safe-area-inset-right))}}
+
+/* Mobile Controls 2.0 — thumb-sized targets, safe-area-aware landscape layout */
+#controls{z-index:3;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+#stickZone{left:max(12px,env(safe-area-inset-left));bottom:max(8px,env(safe-area-inset-bottom));width:clamp(132px,26vh,194px);height:clamp(132px,26vh,194px);display:grid;place-items:center;touch-action:none}
+#stickBase{position:relative;left:auto;top:auto;width:clamp(88px,18vh,128px);height:clamp(88px,18vh,128px);border:2px solid #8efef3bb;background:radial-gradient(circle,#5bffff22,#24376c77);box-shadow:0 0 25px #2af5e355,inset 0 0 22px #58f7ed22;transition:box-shadow .12s}
+#stickKnob{position:absolute;left:50%;top:50%;width:44%;height:44%;margin-left:-22%;margin-top:-22%;background:radial-gradient(circle at 35% 30%,#d5fffd,#4fd4de);border:2px solid #e1ffff;border-radius:50%;box-shadow:0 0 18px #60f9eeaa;will-change:transform;touch-action:none}
+#stickZone.active #stickBase{box-shadow:0 0 36px #49fbe999,inset 0 0 25px #58f7ed44}
+#jump{right:max(18px,env(safe-area-inset-right));bottom:max(18px,env(safe-area-inset-bottom));width:clamp(82px,20vh,120px);height:clamp(82px,20vh,120px);padding:0;border-radius:50%;touch-action:none;user-select:none;-webkit-user-select:none;background:radial-gradient(circle at 40% 30%,#d984f5,#7b31bf);border:3px solid #f1bbff;box-shadow:0 0 28px #c44ae5a0,inset 0 0 24px #ffbaff55;font-size:clamp(13px,3vh,18px);font-weight:900;letter-spacing:.08em;transition:filter .1s,box-shadow .1s}
+#jump.pressed{filter:brightness(1.35);box-shadow:0 0 40px #e679ff,inset 0 0 24px #fff8}
+@media (orientation:landscape) and (max-height:450px){#stickZone{width:clamp(116px,32vh,150px);height:clamp(116px,32vh,150px)}#stickBase{width:clamp(82px,23vh,108px);height:clamp(82px,23vh,108px)}#jump{width:clamp(76px,24vh,100px);height:clamp(76px,24vh,100px)}#hud{padding-left:15%;padding-right:15%}#status{font-size:clamp(9px,2.4vh,13px)}}
+@media (orientation:portrait){#controls{display:none!important}}
+@media (prefers-reduced-motion:reduce){#stickBase,#jump{transition:none}}
