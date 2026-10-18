@@ -1,0 +1,9 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><title>SHIFT ARENA</title><link rel="stylesheet" href="/static/style.css"></head><body>
+<canvas id="game"></canvas>
+<div id="hud" class="hidden"><div id="timer">60</div><div id="status">SURVIVE THE SHIFT</div><div id="players">8 ALIVE</div><div id="roomCode"></div></div>
+<div id="menu" class="panel"><div class="eyebrow">NEON SURVIVAL</div><h1>SHIFT<span>ARENA</span></h1><p>THE FLOOR CHANGES. ONLY ONE SURVIVES.</p><input id="name" placeholder="Your player name" maxlength="18" value="Shifter"><div class="line"><input id="code" placeholder="ROOM CODE (optional)" maxlength="6"><button id="online">ONLINE ROOM</button></div><button id="practice" class="primary">PLAY NOW · 7 BOTS</button><small>Online rooms start when 8 players join. Share the room code with friends.</small><div id="error"></div></div>
+<div id="lobby" class="panel hidden"><div class="eyebrow">WAITING FOR PLAYERS</div><h2>ROOM <span id="lobbyCode"></span></h2><p id="lobbyCount">1 / 8 READY</p><p>Share the room code. The match starts automatically when all eight join.</p></div>
+<div id="result" class="panel hidden"><div class="eyebrow">MATCH COMPLETE</div><h1 id="resultTitle">SURVIVED</h1><p id="resultText"></p><button id="again" class="primary">PLAY AGAIN</button><button id="home">MAIN MENU</button></div>
+<div id="controls" class="hidden"><div id="stickZone"><div id="stickBase"><div id="stickKnob"></div></div></div><button id="jump">JUMP</button></div>
+<div id="rotate" class="hidden">ROTATE YOUR PHONE TO LANDSCAPE ↻</div>
+<script src="/static/game.js"></script></body></html>
