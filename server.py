@@ -12,7 +12,7 @@ rooms={}
 
 def nearest_tile(x,y):return min(POSITIONS,key=lambda k:(POSITIONS[k][0]-x)**2+(POSITIONS[k][1]-y)**2)
 def new_room(code,practice=False):
- room={'code':code,'players':{},'clients':{},'practice':practice,'phase':'lobby','start':0,'tiles':{},'event':-1,'winner':None,'last':time.monotonic(),'host':None};rooms[code]=room;return room
+ room={'code':code,'players':{},'clients':{},'practice':practice,'phase':'lobby','start':0,'tiles':{},'event':-1,'winner':None,'last':time.monotonic(),'host':None,'wave':-1,'laser':None};rooms[code]=room;return room
 
 def add_player(room,ws,name,bot=False):
  ids=set(room['players']); pid=next(i for i in range(8) if i not in ids)
@@ -24,23 +24,33 @@ def add_player(room,ws,name,bot=False):
  return pid
 
 def start(room):
- room['phase']='playing';room['start']=time.monotonic();room['tiles']={k:'safe' for k in TILES};room['event']=-1;room['winner']=None
+ room['phase']='playing';room['start']=time.monotonic();room['tiles']={k:'safe' for k in TILES};room['event']=-1;room['wave']=-1;room['laser']=None;room['collapse_at']=0;room['winner']=None
  for p in room['players'].values():
   p['x'],p['y']=SPAWNS[p['id']];p.update(alive=True,jump=0.,cooldown=0.,survival=0.)
 
-def apply_shift(room,step):
+# Arena Chaos Stage 1: all hazards are simulated on the server.
+WAVES=(6,10,18,26,34,42,48,53,57)
+def apply_shift(room,step,now):
  rng=random.Random(17831+step*991)
- active=[k for k,v in room['tiles'].items() if v!='gone']
- # Always preserve center and at least 2/3 of available tiles each wave; no irreversible unsafe tiles in first 2 waves
- candidates=[k for k in active if max(abs(k[0]),abs(k[1]),abs(-k[0]-k[1]))>=max(1,5-step)]
+ active=[k for k,v in room['tiles'].items() if v=='safe']
+ # Avoid creating impossible waves; keep center open until sudden death.
+ candidates=[k for k in active if step>=6 or max(abs(k[0]),abs(k[1]),abs(-k[0]-k[1]))>=2]
  rng.shuffle(candidates)
- count=min(len(candidates),[9,12,14,16,18][step])
+ count=min(len(candidates), (5,7,8,9,10,11,12,12,13)[step], max(0,len(active)-12))
  for k in candidates[:count]:room['tiles'][k]='warning'
- room['collapse_at']=time.monotonic()+2.0
+ room['collapse_at']=now+(1.35 if step>=6 else 2.2)
+
+def laser_state(elapsed):
+ # 1.2-second telegraph; then a rotating beam. Continuous in sudden death.
+ if elapsed<15:return None
+ cycle=(elapsed-15)%16
+ sudden=elapsed>=45
+ if not sudden and cycle>=8:return None
+ return {'angle':round((elapsed-15)*.68,3),'warning':not sudden and cycle<1.2,'active':sudden or cycle>=1.2}
 
 def snapshot(room):
  elapsed=min(60,max(0,time.monotonic()-room['start'])) if room['phase']!='lobby' else 0
- return {'type':'state','code':room['code'],'phase':room['phase'],'time':round(elapsed,1),'players':[{k:v for k,v in p.items() if k in ('id','name','x','y','alive','jump','bot','survival')} for p in room['players'].values()],'tiles':[[q,r,room['tiles'].get((q,r),'safe')] for q,r in TILES], 'winner':room['winner'],'count':len([p for p in room['players'].values() if not p['bot']]),'host':room['host']}
+ return {'type':'state','code':room['code'],'phase':room['phase'],'time':round(elapsed,1),'players':[{k:v for k,v in p.items() if k in ('id','name','x','y','alive','jump','bot','survival')} for p in room['players'].values()],'tiles':[[q,r,room['tiles'].get((q,r),'safe')] for q,r in TILES], 'winner':room['winner'],'count':len([p for p in room['players'].values() if not p['bot']]),'host':room['host'],'laser':room['laser'],'suddenDeath':elapsed>=45 and room['phase']=='playing','hazardWave':room['wave']}
 
 async def broadcast(room):
  msg=json.dumps(snapshot(room))
@@ -56,13 +66,16 @@ async def tick_loop(app):
   for code,room in list(rooms.items()):
    dt=min(.08,now-room['last']);room['last']=now
    if room['phase']=='playing':
-    elapsed=now-room['start']; step=min(4,int(elapsed//10)-1)
-    if step>=0 and step>room['event']:
-     room['event']=step;apply_shift(room,step)
+    elapsed=now-room['start']
+    next_wave=room['wave']+1
+    if next_wave<len(WAVES) and elapsed>=WAVES[next_wave]:
+     room['wave']=next_wave
+     apply_shift(room,next_wave,now)
     if room.get('collapse_at') and now>=room['collapse_at']:
      for k,v in list(room['tiles'].items()):
       if v=='warning':room['tiles'][k]='gone'
      room['collapse_at']=0
+    room['laser']=laser_state(elapsed)
     alive=[p for p in room['players'].values() if p['alive']]
     for p in alive:
      if p['bot']:
@@ -72,12 +85,21 @@ async def tick_loop(app):
        dx,dy=target[0]-p['x'],target[1]-p['y'];mag=math.hypot(dx,dy)
        p['input']=[dx/max(mag,1),dy/max(mag,1)]
        if mag<.5:p['input']=[0,0]
+     # Bots can anticipate the sweep and jump, using the same cooldown as humans.
+     laser=room['laser']
+     if p['bot'] and laser and laser['active'] and p['cooldown']<=0:
+      a=laser['angle'];distance=abs(-math.sin(a)*p['x']+math.cos(a)*p['y'])
+      if distance<1.8 and math.hypot(p['x'],p['y'])<11.3:p['jump']=.7;p['cooldown']=1.15
      ix,iy=p['input'];mag=max(1,math.hypot(ix,iy));speed=4.2
      p['x']+=ix/mag*speed*dt;p['y']+=iy/mag*speed*dt
      p['jump']=max(0,p['jump']-dt);p['cooldown']=max(0,p['cooldown']-dt)
      p['survival']=min(60,elapsed)
      tile=nearest_tile(p['x'],p['y']);tx,ty=POSITIONS[tile]
      if math.hypot(p['x'],p['y'])>12.2 or (room['tiles'][tile]=='gone' and p['jump']<=0 and math.hypot(p['x']-tx,p['y']-ty)<1.25):p['alive']=False
+     laser=room['laser']
+     if p['alive'] and laser and laser['active'] and p['jump']<=0 and math.hypot(p['x'],p['y'])<11.4:
+      a=laser['angle']
+      if abs(-math.sin(a)*p['x']+math.cos(a)*p['y'])<.32:p['alive']=False
     alive=[p for p in room['players'].values() if p['alive']]
     if elapsed>=60 or len(alive)<=1:
      ranked=sorted(room['players'].values(),key=lambda p:(p['alive'],p['survival'],-math.hypot(p['x'],p['y']),-p['id']),reverse=True)
