@@ -1,4 +1,4 @@
-import asyncio, json, math, random, secrets, time, os
+import asyncio, json, math, random, secrets, time, os, sqlite3
 from pathlib import Path
 from aiohttp import web, WSMsgType
 ROOT=Path(__file__).parent
@@ -9,14 +9,37 @@ SIZE=1.35
 POSITIONS={(q,r):(SIZE*math.sqrt(3)*(q+r/2),SIZE*1.5*r) for q,r in TILES}
 SPAWNS=[(7.3*math.cos(i*math.pi/4),7.3*math.sin(i*math.pi/4)) for i in range(8)]
 rooms={}
+# Server-authoritative cosmetic economy. Set DATA_DIR to a persistent Render disk mount
+# to keep purchases across deploys. Without a disk, Render storage is ephemeral.
+DATA_DIR=Path(os.environ.get('DATA_DIR',str(ROOT)))
+DATA_DIR.mkdir(parents=True,exist_ok=True)
+DB=sqlite3.connect(DATA_DIR/'shift_profiles.sqlite3')
+DB.execute("""CREATE TABLE IF NOT EXISTS profiles (token TEXT PRIMARY KEY, coins INTEGER NOT NULL DEFAULT 0, skin TEXT NOT NULL DEFAULT "cyan", owned TEXT NOT NULL DEFAULT '["cyan"]', matches INTEGER NOT NULL DEFAULT 0, wins INTEGER NOT NULL DEFAULT 0)""")
+DB.commit()
+SKINS={'cyan':('Classic Cyan',0,'#4ffbe0'),'red':('Neon Red',100,'#ff577e'),'blue':('Electric Blue',200,'#4599ff'),'green':('Toxic Green',350,'#8eff63'),'purple':('Royal Purple',500,'#ba79ff'),'gold':('Legendary Gold',1000,'#ffd36a')}
+def profile(token):
+ row=DB.execute('SELECT coins,skin,owned,matches,wins FROM profiles WHERE token=?',(token,)).fetchone()
+ if row is None:return None
+ return {'type':'profile','coins':row[0],'skin':row[1],'owned':json.loads(row[2]),'matches':row[3],'wins':row[4],'shop':[{'id':k,'name':v[0],'price':v[1],'color':v[2]} for k,v in SKINS.items()]}
+def reward(room):
+ # Award once, after the server has decided the winner. No rewards for bots.
+ if room.get('rewarded'):return
+ room['rewarded']=True
+ for player in room['players'].values():
+  token=player.get('token')
+  if not token or player['bot']:continue
+  amount=20+(50 if player['id']==room['winner'] else 0)+(10 if player['survival']>=30 else 0)
+  DB.execute('UPDATE profiles SET coins=coins+?,matches=matches+1,wins=wins+? WHERE token=?',(amount,int(player['id']==room['winner']),token))
+ DB.commit()
+
 
 def nearest_tile(x,y):return min(POSITIONS,key=lambda k:(POSITIONS[k][0]-x)**2+(POSITIONS[k][1]-y)**2)
 def new_room(code,practice=False):
- room={'code':code,'players':{},'clients':{},'practice':practice,'phase':'lobby','start':0,'tiles':{},'event':-1,'winner':None,'last':time.monotonic(),'host':None,'wave':-1,'laser':None};rooms[code]=room;return room
+ room={'code':code,'players':{},'clients':{},'practice':practice,'phase':'lobby','start':0,'tiles':{},'event':-1,'winner':None,'last':time.monotonic(),'host':None,'wave':-1,'laser':None,'rewarded':False};rooms[code]=room;return room
 
 def add_player(room,ws,name,bot=False):
  ids=set(room['players']); pid=next(i for i in range(8) if i not in ids)
- x,y=SPAWNS[pid];p={'id':pid,'name':(name or 'Shifter')[:18],'x':x,'y':y,'alive':True,'jump':0.,'cooldown':0.,'input':[0,0],'bot':bot,'survival':0.,'angle':0.,'disconnect':False}
+ x,y=SPAWNS[pid];p={'id':pid,'name':(name or 'Shifter')[:18],'x':x,'y':y,'alive':True,'jump':0.,'cooldown':0.,'input':[0,0],'bot':bot,'survival':0.,'angle':0.,'disconnect':False,'skin':'cyan','token':None}
  room['players'][pid]=p
  if ws:
   room['clients'][ws]=pid
@@ -24,7 +47,7 @@ def add_player(room,ws,name,bot=False):
  return pid
 
 def start(room):
- room['phase']='playing';room['start']=time.monotonic();room['tiles']={k:'safe' for k in TILES};room['event']=-1;room['wave']=-1;room['laser']=None;room['collapse_at']=0;room['winner']=None
+ room['phase']='playing';room['start']=time.monotonic();room['tiles']={k:'safe' for k in TILES};room['event']=-1;room['wave']=-1;room['laser']=None;room['collapse_at']=0;room['winner']=None;room['rewarded']=False;room['profiles_sent']=False
  for p in room['players'].values():
   p['x'],p['y']=SPAWNS[p['id']];p.update(alive=True,jump=0.,cooldown=0.,survival=0.)
 
@@ -50,7 +73,7 @@ def laser_state(elapsed):
 
 def snapshot(room):
  elapsed=min(60,max(0,time.monotonic()-room['start'])) if room['phase']!='lobby' else 0
- return {'type':'state','code':room['code'],'phase':room['phase'],'time':round(elapsed,1),'players':[{k:v for k,v in p.items() if k in ('id','name','x','y','alive','jump','bot','survival')} for p in room['players'].values()],'tiles':[[q,r,room['tiles'].get((q,r),'safe')] for q,r in TILES], 'winner':room['winner'],'count':len([p for p in room['players'].values() if not p['bot']]),'host':room['host'],'laser':room['laser'],'suddenDeath':elapsed>=45 and room['phase']=='playing','hazardWave':room['wave']}
+ return {'type':'state','code':room['code'],'phase':room['phase'],'time':round(elapsed,1),'players':[{k:v for k,v in p.items() if k in ('id','name','x','y','alive','jump','bot','survival','skin')} for p in room['players'].values()],'tiles':[[q,r,room['tiles'].get((q,r),'safe')] for q,r in TILES], 'winner':room['winner'],'count':len([p for p in room['players'].values() if not p['bot']]),'host':room['host'],'laser':room['laser'],'suddenDeath':elapsed>=45 and room['phase']=='playing','hazardWave':room['wave']}
 
 async def broadcast(room):
  msg=json.dumps(snapshot(room))
@@ -103,20 +126,51 @@ async def tick_loop(app):
     alive=[p for p in room['players'].values() if p['alive']]
     if elapsed>=60 or len(alive)<=1:
      ranked=sorted(room['players'].values(),key=lambda p:(p['alive'],p['survival'],-math.hypot(p['x'],p['y']),-p['id']),reverse=True)
-     room['winner']=ranked[0]['id'] if ranked else None;room['phase']='ended'
+     room['winner']=ranked[0]['id'] if ranked else None;room['phase']='ended';reward(room)
    await broadcast(room)
+   if room.get('rewarded') and not room.get('profiles_sent'):
+    room['profiles_sent']=True
+    for client,player_id in list(room['clients'].items()):
+     player_token=room['players'][player_id].get('token')
+     if player_token and not client.closed:
+      try:await client.send_json(profile(player_token))
+      except Exception:pass
    if not room['clients'] and room['phase']!='playing':rooms.pop(code,None)
 
 async def ws_handler(request):
  ws=web.WebSocketResponse(heartbeat=20);await ws.prepare(request)
- room=None;pid=None
+ room=None;pid=None;token=None
  try:
   async for msg in ws:
    if msg.type!=WSMsgType.TEXT:continue
    try:d=json.loads(msg.data)
    except:continue
    typ=d.get('type')
-   if typ=='join' and room is None:
+   if typ=='profile' and room is None:
+    candidate=str(d.get('token',''))[:128]
+    if candidate and profile(candidate):token=candidate
+    else:
+     token=secrets.token_urlsafe(32)
+     DB.execute('INSERT INTO profiles(token) VALUES(?)',(token,));DB.commit()
+    await ws.send_json({'type':'identity','token':token})
+    await ws.send_json(profile(token))
+   elif typ=='buy' and token:
+    item=str(d.get('skin',''))
+    pr=profile(token)
+    if item not in SKINS:await ws.send_json({'type':'shop_error','message':'Unknown skin'});continue
+    if item in pr['owned']:await ws.send_json({'type':'shop_error','message':'Already owned'});continue
+    cost=SKINS[item][1]
+    if pr['coins']<cost:await ws.send_json({'type':'shop_error','message':'Not enough coins'});continue
+    owned=pr['owned']+[item]
+    DB.execute('UPDATE profiles SET coins=coins-?,owned=? WHERE token=?',(cost,json.dumps(owned),token));DB.commit()
+    await ws.send_json(profile(token))
+   elif typ=='equip' and token:
+    item=str(d.get('skin',''))
+    if item not in profile(token)['owned']:await ws.send_json({'type':'shop_error','message':'Skin not owned'});continue
+    DB.execute('UPDATE profiles SET skin=? WHERE token=?',(item,token));DB.commit()
+    if room and pid in room['players']:room['players'][pid]['skin']=item
+    await ws.send_json(profile(token))
+   elif typ=='join'  and room is None:
     practice=bool(d.get('practice'));code=str(d.get('code','')).upper().strip()[:6]
     if practice:code=secrets.token_hex(3).upper()
     if not code:code=secrets.token_hex(3).upper()
@@ -124,6 +178,8 @@ async def ws_handler(request):
     if room['phase']!='lobby' or len(room['players'])>=8:
      await ws.send_json({'type':'error','message':'Room full or already playing'});room=None;continue
     pid=add_player(room,ws,str(d.get('name','Player')))
+    if token:
+     room['players'][pid]['token']=token;room['players'][pid]['skin']=profile(token)['skin']
     await ws.send_json({'type':'joined','id':pid,'code':code})
     if practice:
      for i in range(7):add_player(room,None,'BOT '+str(i+1),True)
