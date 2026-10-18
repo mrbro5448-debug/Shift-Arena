@@ -1,7 +1,31 @@
-const canvas=document.querySelector('#game'),ctx=canvas.getContext('2d');let W=0,H=0,scale=1,state=null,myId=-1,ws=null,phase='menu',room='',input={x:0,y:0},jumpQueued=false,localPractice=false,keys={};
+const canvas=document.querySelector('#game'),ctx=canvas.getContext('2d');let W=0,H=0,scale=1,state=null,myId=-1,ws=null,phase='menu',room='',input={x:0,y:0},jumpQueued=false,localPractice=false,keys={},profile=null,shopOnly=false;
 const $=id=>document.getElementById(id),show=(id,on)=>$(id).classList.toggle('hidden',!on);
 function resize(){W=canvas.width=innerWidth*devicePixelRatio;H=canvas.height=innerHeight*devicePixelRatio;scale=Math.min(W/30,H/22)}addEventListener('resize',resize);resize();
-function connect(practice){localPractice=practice;show('menu',false);show('result',false);$('error').textContent='';const protocol=location.protocol==='https:'?'wss':'ws';ws=new WebSocket(`${protocol}://${location.host}/ws`);ws.onopen=()=>ws.send(JSON.stringify({type:'join',practice,name:$('name').value,code:$('code').value}));ws.onmessage=e=>{let d=JSON.parse(e.data);if(d.type==='error'){if(phase==='lobby'){$('lobbyHint').textContent=d.message}else{show('menu',true);$('error').textContent=d.message}return}if(d.type==='joined'){myId=d.id;room=d.code;return}if(d.type==='state'){state=d;setPhase(d.phase);$('timer').textContent=Math.max(0,Math.ceil(60-d.time));$('players').textContent=d.players.filter(p=>p.alive).length+' ALIVE';$('roomCode').textContent='ROOM '+d.code;$('lobbyCode').textContent=d.code;$('lobbyCount').textContent=d.count+' / 8 PLAYERS';$('lobbyNames').textContent=d.players.filter(p=>!p.bot).map(p=>(p.id===d.host?'★ ':'')+p.name).join(' · ');show('startMatch',d.phase==='lobby'&&myId===d.host&&d.count>=2);$('lobbyHint').textContent=myId===d.host?(d.count>=2?'Ready! Start when your friends have joined.':'Invite at least one friend to start.'):'Waiting for the room host to start…';if(d.phase==='playing')$('status').textContent=d.suddenDeath?'⚡ SUDDEN DEATH':d.laser?.warning?'⚠ LASER INCOMING':d.tiles.some(t=>t[2]==='warning')?'⚠ DANGER ZONES':'SURVIVE THE SHIFT';if(d.phase==='ended'){let win=d.players.find(p=>p.id===d.winner);$('resultTitle').textContent=d.winner===myId?'VICTORY!':'ELIMINATED';$('resultText').textContent='Winner: '+(win?.name||'Unknown')+' · '+d.time.toFixed(0)+' seconds';}}};ws.onclose=()=>{if(phase!=='ended'){show('menu',true);$('error').textContent='Disconnected. Rejoin to play.';setPhase('menu')}}}
+function connect(practice){shopOnly=false;localPractice=practice;show('menu',false);show('result',false);$('error').textContent='';const protocol=location.protocol==='https:'?'wss':'ws';ws=new WebSocket(`${protocol}://${location.host}/ws`);ws.onopen=()=>{ws.send(JSON.stringify({type:'profile',token:localStorage.getItem('shift_arena_token')||''}));ws.send(JSON.stringify({type:'join',practice,name:$('name').value,code:$('code').value}));};ws.onmessage=e=>{let d=JSON.parse(e.data);if(handleEconomy(d))return;if(d.type==='error'){if(phase==='lobby'){$('lobbyHint').textContent=d.message}else{show('menu',true);$('error').textContent=d.message}return}if(d.type==='joined'){myId=d.id;room=d.code;return}if(d.type==='state'){state=d;setPhase(d.phase);$('timer').textContent=Math.max(0,Math.ceil(60-d.time));$('players').textContent=d.players.filter(p=>p.alive).length+' ALIVE';$('roomCode').textContent='ROOM '+d.code;$('lobbyCode').textContent=d.code;$('lobbyCount').textContent=d.count+' / 8 PLAYERS';$('lobbyNames').textContent=d.players.filter(p=>!p.bot).map(p=>(p.id===d.host?'★ ':'')+p.name).join(' · ');show('startMatch',d.phase==='lobby'&&myId===d.host&&d.count>=2);$('lobbyHint').textContent=myId===d.host?(d.count>=2?'Ready! Start when your friends have joined.':'Invite at least one friend to start.'):'Waiting for the room host to start…';if(d.phase==='playing')$('status').textContent=d.suddenDeath?'⚡ SUDDEN DEATH':d.laser?.warning?'⚠ LASER INCOMING':d.tiles.some(t=>t[2]==='warning')?'⚠ DANGER ZONES':'SURVIVE THE SHIFT';if(d.phase==='ended'){let win=d.players.find(p=>p.id===d.winner);$('resultTitle').textContent=d.winner===myId?'VICTORY!':'ELIMINATED';$('resultText').textContent='Winner: '+(win?.name||'Unknown')+' · '+d.time.toFixed(0)+' seconds';}}};ws.onclose=()=>{if(shopOnly)return;if(phase!=='ended'){show('menu',true);$('error').textContent='Disconnected. Rejoin to play.';setPhase('menu')}}}
+
+// Cosmetic shop — server validates all purchases, equips and coin rewards.
+function handleEconomy(d){
+ if(d.type==='identity'){localStorage.setItem('shift_arena_token',d.token);return true}
+ if(d.type==='profile'){profile=d;$('coins').textContent=d.coins;$('shopCoins').textContent=d.coins;renderShop();return true}
+ if(d.type==='shop_error'){$('shopMessage').textContent=d.message;return true}
+ return false;
+}
+function renderShop(){if(!profile)return;const grid=$('skinGrid');grid.replaceChildren();for(const item of profile.shop){
+ const owned=profile.owned.includes(item.id),equipped=profile.skin===item.id;
+ const card=document.createElement('div');card.className='skinCard';
+ const dot=document.createElement('div');dot.className='skinOrb';dot.style.background=item.color;dot.style.boxShadow=`0 0 20px ${item.color}`;
+ const label=document.createElement('strong');label.textContent=item.name;
+ const button=document.createElement('button');button.textContent=equipped?'EQUIPPED':owned?'EQUIP':`🪙 ${item.price}`;button.disabled=equipped;
+ button.onclick=()=>{if(ws?.readyState===1){$('shopMessage').textContent='';ws.send(JSON.stringify({type:owned?'equip':'buy',skin:item.id}))}};
+ card.append(dot,label,button);grid.append(card);
+ }}
+$('shopOpen').onclick=()=>{
+ show('menu',false);show('shop',true);$('shopMessage').textContent='';
+ if(ws?.readyState!==1){shopOnly=true;const protocol=location.protocol==='https:'?'wss':'ws';ws=new WebSocket(`${protocol}://${location.host}/ws`);ws.onopen=()=>ws.send(JSON.stringify({type:'profile',token:localStorage.getItem('shift_arena_token')||''}));ws.onmessage=e=>handleEconomy(JSON.parse(e.data));}
+ renderShop();
+};
+$('shopClose').onclick=()=>{show('shop',false);show('menu',true);if(shopOnly){ws?.close();ws=null;shopOnly=false}};
+
 function setPhase(p){if(phase===p)return;if(p!=='playing'&&typeof resetTouch==='function')resetTouch();phase=p;show('menu',p==='menu');show('lobby',p==='lobby');show('result',p==='ended');show('hud',p==='playing');show('controls',p==='playing');show('rotate',p==='playing');$('again').textContent=localPractice?'PLAY AGAIN':'NEW ONLINE ROOM'}
 $('startMatch').onclick=()=>{if(ws?.readyState===1)ws.send(JSON.stringify({type:'start'}))};$('practice').onclick=()=>connect(true);$('online').onclick=()=>connect(false);$('again').onclick=()=>{if(localPractice&&ws?.readyState===1){ws.send(JSON.stringify({type:'restart'}))}else{ws?.close();connect(false)}};$('home').onclick=()=>{ws?.close();state=null;setPhase('menu')};
 function send(){if(ws?.readyState===1&&phase==='playing'){let x=input.x+(keys.ArrowRight||keys.d?1:0)-(keys.ArrowLeft||keys.a?1:0),y=input.y+(keys.ArrowDown||keys.s?1:0)-(keys.ArrowUp||keys.w?1:0);ws.send(JSON.stringify({type:'input',x,y,jump:jumpQueued}));jumpQueued=false}}setInterval(send,50);
@@ -57,6 +81,7 @@ const SQ=Math.sqrt(3), TAU=Math.PI*2;
 const reducedMotion=matchMedia('(prefers-reduced-motion: reduce)').matches;
 const particles=[],trails=new Map(),tileHistory=new Map();
 let lastFrame=0,lastPhase='',lastSecond=-1,shake=0,flash=0,ambient=[];
+const skinColors={cyan:'#4ffbe0',red:'#ff577e',blue:'#4599ff',green:'#8eff63',purple:'#ba79ff',gold:'#ffd36a'};
 const palette=['#4cf4f0','#bb83ff','#ff6dba','#ffc979'];
 function pos(q,r){return [1.35*SQ*(q+r/2),1.35*1.5*r]}
 function screen(x,y){return [W/2+x*scale,H*.52+y*scale*.72]}
@@ -77,7 +102,7 @@ function renderTiles(t){const tiles=state?.tiles||Array.from({length:11},(_,i)=>
  if(!warn){ctx.beginPath();ctx.moveTo(sx-rad*.25,sy-rad*.28);ctx.lineTo(sx+rad*.2,sy-rad*.28);ctx.strokeStyle='#91d7ff20';ctx.lineWidth=1.2*devicePixelRatio;ctx.stroke()}
  }
  const [cx,cy]=screen(0,0);ctx.save();glow('#ad7aff',25);ctx.beginPath();ctx.ellipse(cx,cy,scale*.8,scale*.58,0,0,TAU);ctx.strokeStyle='#ad8aff';ctx.lineWidth=2.5*devicePixelRatio;ctx.stroke();ctx.restore()}
-function renderPlayers(t,dt){const ps=state?.players||[];const seen=new Set();for(const p of ps){if(!p.alive)continue;seen.add(p.id);const [x,y]=screen(p.x,p.y),me=p.id===myId,color=me?'#4ffbe0':p.bot?'#ffb968':palette[p.id%palette.length],jump=p.jump>0?Math.sin((.7-p.jump)/.7*Math.PI)*scale*.6:0;
+function renderPlayers(t,dt){const ps=state?.players||[];const seen=new Set();for(const p of ps){if(!p.alive)continue;seen.add(p.id);const [x,y]=screen(p.x,p.y),me=p.id===myId,color=p.bot?'#ffb968':(skinColors[p.skin]|| (me?'#4ffbe0':palette[p.id%palette.length])),jump=p.jump>0?Math.sin((.7-p.jump)/.7*Math.PI)*scale*.6:0;
  let trail=trails.get(p.id)||[];if(!reducedMotion&&(!trail.length||Math.hypot(x-trail[trail.length-1].x,y-trail[trail.length-1].y)>scale*.15)){trail.push({x,y,age:0});if(trail.length>9)trail.shift()}trail.forEach(a=>a.age+=dt);trail=trail.filter(a=>a.age<.45);trails.set(p.id,trail);
  ctx.save();trail.forEach((a,i)=>{ctx.globalAlpha=.12*(1-a.age/.45)*(i+1)/9;ctx.beginPath();ctx.arc(a.x,a.y-jump,scale*.34,0,TAU);ctx.fillStyle=color;ctx.fill()});ctx.restore();
  ctx.save();ctx.beginPath();ctx.ellipse(x,y+scale*.25,scale*.45,scale*.18,0,0,TAU);ctx.fillStyle='#02050fbb';ctx.fill();ctx.restore();
